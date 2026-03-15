@@ -61,7 +61,7 @@ spark-submit  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.po
 
 ## 4/Kết nối Superset: 
 
-Vảo thư mục superset:
+Vào thư mục superset:
 
 B1: Cài python: sudo apt install python3-pip python3-venv
 
