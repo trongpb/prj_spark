@@ -1,4 +1,5 @@
 import os
+
 import pyspark.sql.functions as F
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col
@@ -36,7 +37,7 @@ def write_star_schema(batch_df, batch_id):
     # ========= 1-DIM TIME =========
     dim_time = batch_df.select(
         F.date_format("event_time", "yyyyMMddHHmmss").cast("string").alias("event_id"),
-        F.col("time_stamp"),
+     	F.col("time_stamp"),
         F.to_timestamp("local_time", "yyyy-MM-dd HH:mm:ss").alias("local_time"),
         F.to_date("event_time").alias("short_date"),
         F.year("event_time").alias("year"),
@@ -185,7 +186,7 @@ def write_star_schema(batch_df, batch_id):
     stmt.execute("TRUNCATE dim_url_staging")
     stmt.close()
     conn.close()
-
+    
     # ========= 8 FACT =========
     fact = batch_df.select(
         F.col("_id").alias("log_id"),
