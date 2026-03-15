@@ -7,5 +7,5 @@ Tạo project sử dụng kafka để streaming dữ liệu từ server , dùng 
 -Vào thư mục postgres chạy lệnh: docker compose up -d
 -Kiểm tra: http://localhost:8380
 -Tạo DB postgres:
-
+![Schemal database](schemalDB.png)
 3/
