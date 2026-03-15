@@ -15,6 +15,24 @@ Tạo project sử dụng kafka để streaming dữ liệu từ server , dùng 
 
 ![Schemal database](schemalDB.png)
 
+-Clear data:
+
+delete from dim_device;
+
+delete from dim_product;
+
+delete from dim_product_option;
+
+delete from dim_store;
+
+delete from dim_time;
+
+delete from dim_url;
+
+delete from dim_user;
+
+delete from fact_view;
+
 ## 3/Vào thư muc spark chạy lệnh sau:
 
 docker container stop kafka-streaming || true &&
@@ -40,3 +58,23 @@ spark-submit  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.po
 --deploy-mode client \
 --master yarn \
 /spark/11-kafka-streaming/kafka_streaming.py"
+
+## 4/Kết nối Superset: 
+
+Vảo thư mục superset:
+
+B1: Cài python: sudo apt install python3-pip python3-venv
+
+B2: Tạo môi trường: 
+
+python3 -m venv superset-env
+source superset-env/bin/activate
+
+B3: Chạy superset: 
+
+ superset run -h 0.0.0.0 -p 8089 --with-threads --reload --debugger
+
+B4: Vào web:  http://localhost:8089/
+
+
+
