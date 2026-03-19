@@ -36,7 +36,7 @@ def upsert_dim_table(
 
     # 1. Deduplicate theo key
     df = df.dropDuplicates(key_columns)
-    df = df.dropna(subset=key_columns)
+
     # 2. Write vào staging
     df.coalesce(4).write \
         .mode("append") \
