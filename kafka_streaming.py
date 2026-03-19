@@ -9,20 +9,7 @@ from util.logger import Log4j
 # =====================
 # FOREACH BATCH
 # =====================
-# Khi nào batch_id được tạo?
-# Spark gom dữ liệu trong 30 giây
-# Tạo 1 micro-batch
-# Gán cho batch đó 1 batch_id duy nhất
-# Gọi hàm foreachBatch
-# 📌 Mỗi batch chỉ có 1 batch_id
-# 🔹 batch_id dùng để làm gì?
-# ✅ 1️⃣ Idempotent (tránh ghi trùng dữ liệu)
-# Ví dụ:
-# if batch_id <= last_batch_id:
-#     return
-# 👉 Khi job restart:
-# Spark có thể chạy lại batch cũ
-# Dùng batch_id để bỏ qua batch đã xử lý
+
 def upsert_dim_table(
     df,
     table_name,
