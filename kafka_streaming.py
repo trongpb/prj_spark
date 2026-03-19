@@ -23,6 +23,51 @@ from util.logger import Log4j
 # 👉 Khi job restart:
 # Spark có thể chạy lại batch cũ
 # Dùng batch_id để bỏ qua batch đã xử lý
+def upsert_dim_table(
+    df,
+    table_name,
+    staging_table,
+    key_columns,
+    insert_columns,
+    spark,
+    pg_url,
+    pg_props
+):
+
+    # 1. Deduplicate theo key
+    df = df.dropDuplicates(key_columns)
+    df = df.dropna(subset=key_columns)
+    # 2. Write vào staging
+    df.coalesce(4).write \
+        .mode("append") \
+        .jdbc(pg_url, staging_table, properties=pg_props)
+
+    # 3. Build SQL dynamic
+    cols = ",".join(insert_columns)
+    keys = ",".join(key_columns)
+
+    merge_sql = f"""
+        INSERT INTO {table_name} ({cols})
+        SELECT DISTINCT {cols} FROM {staging_table}
+        ON CONFLICT ({keys}) DO NOTHING
+    """
+
+    truncate_sql = f"TRUNCATE {staging_table}"
+
+    # 4. Execute SQL
+    conn = spark._jvm.java.sql.DriverManager.getConnection(
+        pg_url,
+        pg_props["user"],
+        pg_props["password"]
+    )
+    stmt = conn.createStatement()
+
+    stmt.execute(merge_sql)
+    stmt.execute(truncate_sql)
+
+    stmt.close()
+    conn.close()
+
 def write_star_schema(batch_df, batch_id):
     if batch_df.isEmpty():
         return
@@ -34,175 +79,109 @@ def write_star_schema(batch_df, batch_id):
         F.to_timestamp("local_time", "yyyy-MM-dd HH:mm:ss")
     )
 
-    # ========= 1-DIM TIME =========
+    # ========= DIM TIME =========
     dim_time = batch_df.select(
-        F.date_format("event_time", "yyyyMMddHHmmss").cast("string").alias("event_id"),
-     	F.col("time_stamp"),
-        F.to_timestamp("local_time", "yyyy-MM-dd HH:mm:ss").alias("local_time"),
+        F.date_format("event_time", "yyyyMMddHH").cast("string").alias("event_id"),
+        "time_stamp",
+        F.col("event_time").alias("local_time"),
         F.to_date("event_time").alias("short_date"),
         F.year("event_time").alias("year"),
         F.month("event_time").alias("month"),
         F.dayofmonth("event_time").alias("day"),
         F.hour("event_time").alias("hour")
-    ).dropDuplicates(["event_id"])
-
-    dim_time.write \
-        .mode("append") \
-        .jdbc(pg_url, "dim_time_staging", properties=pg_props)
-    conn = spark._jvm.java.sql.DriverManager.getConnection(
-        pg_url,
-        pg_props["user"],
-        pg_props["password"]
     )
-    stmt = conn.createStatement()
-    stmt.execute("""
-               INSERT INTO dim_time (event_id,local_time,time_stamp,short_date,day,month,year,hour)
-               SELECT DISTINCT event_id,local_time,time_stamp,short_date,day,month,year,hour FROM dim_time_staging
-               ON CONFLICT (event_id) DO NOTHING
-               """)
 
-    stmt.execute("TRUNCATE dim_time_staging")
-    stmt.close()
-    conn.close()
-    # ========= 2DIM USER =========
-    dim_user = batch_df.select(
-        F.col("ip"),
-        "email",
-        "user_agent"
-    ).dropDuplicates(["ip"])
-
-    dim_user.write \
-        .mode("append") \
-        .jdbc(pg_url, "dim_user_staging", properties=pg_props)
-    conn = spark._jvm.java.sql.DriverManager.getConnection(
-        pg_url,
-        pg_props["user"],
-        pg_props["password"]
+    upsert_dim_table(
+        dim_time,
+        table_name="dim_time",
+        staging_table="dim_time_staging",
+        key_columns=["event_id"],
+        insert_columns=["event_id","local_time","time_stamp","short_date","day","month","year","hour"],
+        spark=spark,
+        pg_url=pg_url,
+        pg_props=pg_props
     )
-    stmt = conn.createStatement()
-    stmt.execute("""
-                   INSERT INTO dim_user (ip,email,user_agent)
-                   SELECT DISTINCT ip,email,user_agent FROM dim_user_staging
-                   ON CONFLICT (ip) DO NOTHING
-                   """)
 
-    stmt.execute("TRUNCATE dim_user_staging")
-    stmt.close()
-    conn.close()
-    # ========= 3DIM DEVICE =========
-    dim_device = batch_df.select(
-        F.col("device_id"),
-    ).dropDuplicates(["device_id"])
+    # ========= DIM USER =========
+    dim_user = batch_df.select("ip", "email", "user_agent")
 
-    dim_device.write \
-        .mode("append") \
-        .jdbc(pg_url, "dim_device_staging", properties=pg_props)
-    conn = spark._jvm.java.sql.DriverManager.getConnection(
-        pg_url,
-        pg_props["user"],
-        pg_props["password"]
+    upsert_dim_table(
+        dim_user,
+        "dim_user",
+        "dim_user_staging",
+        ["ip"],
+        ["ip","email","user_agent"],
+        spark, pg_url, pg_props
     )
-    stmt = conn.createStatement()
-    stmt.execute("""
-           INSERT INTO dim_device (device_id)
-           SELECT DISTINCT device_id FROM dim_device_staging
-           ON CONFLICT (device_id) DO NOTHING
-           """)
 
-    stmt.execute("TRUNCATE dim_device_staging")
-    stmt.close()
-    conn.close()
+    # ========= DIM DEVICE =========
+    dim_device = batch_df.select("device_id")
 
-    # ========= 4 DIM PRODUCT =========
-    dim_product = batch_df.select(
-        F.col("product_id")
-       ).dropDuplicates(["product_id"])
-    dim_product_clean = dim_product.filter(col("product_id").isNotNull())
-    dim_product_clean.write \
-        .mode("append") \
-        .jdbc(pg_url, "dim_product_staging", properties=pg_props)
-
-    conn = spark._jvm.java.sql.DriverManager.getConnection(
-        pg_url,
-        pg_props["user"],
-        pg_props["password"]
+    upsert_dim_table(
+        dim_device,
+        "dim_device",
+        "dim_device_staging",
+        ["device_id"],
+        ["device_id"],
+        spark, pg_url, pg_props
     )
-    stmt = conn.createStatement()
-    stmt.execute("""
-           INSERT INTO dim_product (product_id)
-           SELECT DISTINCT product_id FROM dim_product_staging
-           ON CONFLICT (product_id) DO NOTHING
-           """)
 
-    stmt.execute("TRUNCATE dim_product_staging")
-    stmt.close()
-    conn.close()
+    # ========= DIM PRODUCT =========
+    dim_product = batch_df.select("product_id") \
+        .filter(F.col("product_id").isNotNull())
 
-    # ========= 5 DIM STORE =========
-    dim_store = batch_df.select("store_id").dropDuplicates(["store_id"])
-
-    dim_store.write \
-        .mode("append") \
-        .jdbc(pg_url, "dim_store_staging", properties=pg_props)
-
-    conn = spark._jvm.java.sql.DriverManager.getConnection(
-        pg_url,
-        pg_props["user"],
-        pg_props["password"]
+    upsert_dim_table(
+        dim_product,
+        "dim_product",
+        "dim_product_staging",
+        ["product_id"],
+        ["product_id"],
+        spark, pg_url, pg_props
     )
-    stmt = conn.createStatement()
-    stmt.execute("""
-       INSERT INTO dim_store (store_id)
-       SELECT DISTINCT store_id FROM dim_store_staging
-       ON CONFLICT (store_id) DO NOTHING
-       """)
 
-    stmt.execute("TRUNCATE dim_store_staging")
-    stmt.close()
-    conn.close()
+    # ========= DIM STORE =========
+    dim_store = batch_df.select("store_id")
 
-    # ========= 6 DIM url =========
-    dim_page = batch_df.select(
+    upsert_dim_table(
+        dim_store,
+        "dim_store",
+        "dim_store_staging",
+        ["store_id"],
+        ["store_id"],
+        spark, pg_url, pg_props
+    )
+
+    # ========= DIM URL =========
+    dim_url = batch_df.select(
         F.hash("current_url").alias("url_id"),
         "current_url",
         "referrer_url"
-    ).dropDuplicates(["current_url"])
-
-    dim_page.write \
-        .mode("append") \
-        .jdbc(pg_url, "dim_url_staging", properties=pg_props)
-    conn = spark._jvm.java.sql.DriverManager.getConnection(
-        pg_url,
-        pg_props["user"],
-        pg_props["password"]
     )
-    stmt = conn.createStatement()
-    stmt.execute("""
-           INSERT INTO dim_url (url_id,current_url,referrer_url)
-           SELECT DISTINCT url_id,current_url,referrer_url FROM dim_url_staging
-           ON CONFLICT (url_id) DO NOTHING
-           """)
 
-    stmt.execute("TRUNCATE dim_url_staging")
-    stmt.close()
-    conn.close()
-    
-    # ========= 8 FACT =========
+    upsert_dim_table(
+        dim_url,
+        "dim_url",
+        "dim_url_staging",
+        ["url_id"],
+        ["url_id","current_url","referrer_url"],
+        spark, pg_url, pg_props
+    )
+
+    # ========= FACT =========
     fact = batch_df.select(
         F.col("_id").alias("log_id"),
-        F.date_format("local_time", "yyyyMMddHHmmss").cast("string").alias("time_id"),
-        F.col("product_id").alias("product_id"),
-        F.col("device_id"),
-        F.col("store_id").alias("store_id"),
+        F.date_format("event_time", "yyyyMMddHH").cast("string").alias("time_id"),
+        "product_id",
+        "device_id",
+        "store_id",
         F.hash("current_url").alias("url_id"),
         F.col("ip").alias("user_id"),
-        F.col("collection")
-    )
-    fact_view_clean = fact.filter(col("product_id").isNotNull())
-    fact_view_clean.write \
+        "collection"
+    ).filter(F.col("product_id").isNotNull())
+
+    fact.write \
         .mode("append") \
         .jdbc(pg_url, "fact_view", properties=pg_props)
-
 
 
 if __name__ == '__main__':
@@ -228,11 +207,13 @@ if __name__ == '__main__':
     # =====================
     # POSTGRES CONFIG
     # =====================
-    pg_url = "jdbc:postgresql://192.168.1.26:5432/postgres"
+    pg_url = "jdbc:postgresql://192.168.1.5:5432/postgres"
     pg_props = {
         "user": "postgres",
         "password": "UnigapPostgres@123",
-        "driver": "org.postgresql.Driver"
+        "driver": "org.postgresql.Driver",
+        "batchsize": "5000",
+        "numPartitions": "4"
     }
 
     # =====================
@@ -259,7 +240,6 @@ if __name__ == '__main__':
         .load()
 
     df.printSchema()
-
     parsed_df = df.select(
         F.from_json(F.col("value").cast("string"), json_schema).alias("v")
     ).select("v.*")
@@ -269,6 +249,7 @@ if __name__ == '__main__':
     # =====================
     query = parsed_df.writeStream \
         .foreachBatch(write_star_schema) \
+        .option("checkpointLocation", "/user/spark/checkpoints/product_view") \
         .trigger(processingTime="30 seconds") \
         .start()
 
